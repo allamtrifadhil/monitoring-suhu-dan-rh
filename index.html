@@ -1,0 +1,338 @@
+<!DOCTYPE html>
+<html lang="id">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Grafik Suhu & RH</title>
+  <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css" rel="stylesheet">
+  <link rel="stylesheet" href="https://cdn.datatables.net/1.13.6/css/jquery.dataTables.min.css">
+  <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+  <script src="https://code.jquery.com/jquery-3.6.0.min.js"></script>
+  <script src="https://cdn.datatables.net/1.13.6/js/jquery.dataTables.min.js"></script>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/jszip/3.10.1/jszip.min.js"></script>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/FileSaver.js/2.0.5/FileSaver.min.js"></script>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js"></script>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/jspdf-autotable/3.5.25/jspdf.plugin.autotable.min.js"></script>
+  <style>
+    body {
+      background: linear-gradient(to right, #f8f9fa, #e9f7f9);
+      font-family: "Segoe UI", sans-serif;
+    }
+    h3 {
+      font-weight: bold;
+      color: #1f3c88;
+    }
+    .card-custom {
+      background-color: #ffffff;
+      border: none;
+      box-shadow: 0 2px 8px rgba(0, 0, 0, 0.1);
+      border-radius: 10px;
+      padding: 20px;
+    }
+    .loader {
+      display: none;
+      border: 4px solid #f3f3f3;
+      border-top: 4px solid #3498db;
+      border-radius: 50%;
+      width: 25px;
+      height: 25px;
+      animation: spin 1s linear infinite;
+      margin-left: 10px;
+    }
+    @keyframes spin {
+      0% { transform: rotate(0deg); }
+      100% { transform: rotate(360deg); }
+    }
+    @media (max-width: 576px) {
+      .form-buttons {
+        flex-direction: column;
+        gap: 10px;
+      }
+    }
+    .form-buttons button {
+      white-space: nowrap;
+    }
+  </style>
+</head>
+<body class="container py-4">
+  <div class="card-custom">
+    <h3 class="mb-4">📊 Grafik Suhu & RH</h3>
+
+    <!-- Form Filter -->
+    <div class="row g-3 mb-3">
+      <div class="col-md-6 col-lg-3">
+        <label for="startDate" class="form-label">Tanggal Awal</label>
+        <input type="date" id="startDate" class="form-control" />
+      </div>
+      <div class="col-md-6 col-lg-3">
+        <label for="endDate" class="form-label">Tanggal Akhir</label>
+        <input type="date" id="endDate" class="form-control" />
+      </div>
+      <div class="col-12 col-lg-6 d-flex align-items-end form-buttons gap-2 flex-wrap">
+        <button class="btn btn-primary flex-fill" onclick="getData()">🔍 Cari</button>
+        <button class="btn btn-warning flex-fill" onclick="downloadChartAndData()">⬇️ Download Grafik & Data</button>
+        <button class="btn btn-danger flex-fill" onclick="downloadPDF()">⬇️ Download PDF Grafik & Tabel</button>
+      </div>
+    </div>
+
+    <div class="d-flex align-items-center mb-2">
+      <span id="statusText" class="text-muted small"></span>
+      <div class="loader" id="loader"></div>
+    </div>
+
+    <!-- Ringkasan -->
+    <div class="card-custom mb-4">
+      <h5 class="fw-bold">📋 Ringkasan Data</h5>
+      <div class="row">
+        <div class="col-md-6">
+          <p><strong>Maximum:</strong> <span id="maxSummary">-</span></p>
+          <p><strong>Minimum:</strong> <span id="minSummary">-</span></p>
+          <p><strong>Average:</strong> <span id="avgSummary">-</span></p>
+        </div>
+        <div class="col-md-6">
+          <p><strong>First Reading:</strong> <span id="firstReading">-</span></p>
+          <p><strong>Last Reading:</strong> <span id="lastReading">-</span></p>
+          <p><strong>Logging Duration:</strong> <span id="logDuration">-</span></p>
+        </div>
+      </div>
+    </div>
+
+    <!-- Grafik -->
+    <canvas id="chartCanvas" height="100"></canvas>
+
+    <!-- Tabel -->
+    <div id="tableContainer" class="mt-4"></div>
+
+    <!-- Tombol Excel -->
+    <div class="d-flex justify-content-end mt-3">
+      <button class="btn btn-success" onclick="downloadExcel()">⬇️ Download Semua Excel</button>
+    </div>
+  </div>
+
+  <script>
+    let chart;
+
+    async function getData() {
+      const loader = document.getElementById("loader");
+      const statusText = document.getElementById("statusText");
+      const tableContainer = document.getElementById("tableContainer");
+      const startDate = document.getElementById("startDate").value;
+      const endDate = document.getElementById("endDate").value;
+
+      if (!startDate || !endDate) {
+        statusText.textContent = 'Mohon isi kedua tanggal terlebih dahulu.';
+        return;
+      }
+
+      loader.style.display = 'inline-block';
+      statusText.textContent = 'Mengambil data...';
+      tableContainer.innerHTML = '';
+
+      try {
+        const response = await fetch(`http://127.0.0.1:1880/api/chart?start=${startDate}&end=${endDate}`);
+        if (!response.ok) throw new Error("Respon tidak OK");
+
+        const chartData = await response.json();
+        const jam = chartData.labels;
+        const suhu = chartData.data[0];
+        const rh = chartData.data[1];
+
+        const labels = jam.map(j => `${startDate} ${j}`);
+        updateChart(labels, suhu, rh);
+
+        const rows = jam.map((j, i) => ({
+          tanggal: startDate,
+          jam: j,
+          suhu: suhu[i],
+          rh: rh[i]
+        }));
+
+        updateSummary(rows);
+
+        statusText.textContent = `Menampilkan ${rows.length} data.`;
+
+        const tableHTML = `
+          <table id="dataTable" class="table table-bordered table-striped table-hover w-100">
+            <thead class="table-primary">
+              <tr>
+                <th>No</th>
+                <th>Tanggal</th>
+                <th>Jam</th>
+                <th>Suhu (°C)</th>
+                <th>RH (%)</th>
+              </tr>
+            </thead>
+            <tbody>
+              ${rows.map((item, index) => `
+                <tr>
+                  <td>${index + 1}</td>
+                  <td>${item.tanggal}</td>
+                  <td>${item.jam}</td>
+                  <td>${item.suhu}</td>
+                  <td>${item.rh}</td>
+                </tr>
+              `).join('')}
+            </tbody>
+          </table>`;
+        tableContainer.innerHTML = tableHTML;
+        $('#dataTable').DataTable({ pageLength: 25 });
+
+      } catch (error) {
+        statusText.textContent = 'Gagal mengambil data dari API.';
+        console.error("Fetch error:", error);
+      } finally {
+        loader.style.display = 'none';
+      }
+    }
+
+    function updateChart(labels, suhu, rh) {
+      const ctx = document.getElementById("chartCanvas").getContext("2d");
+      if (chart) chart.destroy();
+      chart = new Chart(ctx, {
+        type: 'line',
+        data: {
+          labels,
+          datasets: [
+            {
+              label: 'Suhu (°C)',
+              data: suhu,
+              borderColor: 'rgba(255, 99, 132, 1)',
+              backgroundColor: 'rgba(255, 99, 132, 0.2)',
+              fill: false
+            },
+            {
+              label: 'RH (%)',
+              data: rh,
+              borderColor: 'rgba(54, 162, 235, 1)',
+              backgroundColor: 'rgba(54, 162, 235, 0.2)',
+              fill: false
+            }
+          ]
+        },
+        options: {
+          responsive: true,
+          plugins: {
+            legend: { position: 'top' },
+            title: { display: true, text: 'Grafik Suhu & RH' }
+          }
+        }
+      });
+    }
+
+    function updateSummary(rows) {
+      if (rows.length === 0) return;
+
+      const suhuList = rows.map(r => parseFloat(r.suhu));
+      const rhList = rows.map(r => parseFloat(r.rh));
+
+      const minSuhu = Math.min(...suhuList);
+      const maxSuhu = Math.max(...suhuList);
+      const avgSuhu = (suhuList.reduce((a, b) => a + b, 0) / suhuList.length).toFixed(1);
+
+      const minRH = Math.min(...rhList);
+      const maxRH = Math.max(...rhList);
+      const avgRH = (rhList.reduce((a, b) => a + b, 0) / rhList.length).toFixed(1);
+
+      const first = `${rows[0].tanggal} ${rows[0].jam}`;
+      const last = `${rows[rows.length - 1].tanggal} ${rows[rows.length - 1].jam}`;
+
+      const fixFormat = (jam) => jam.replaceAll('.', ':');
+      const firstDate = new Date(`${rows[0].tanggal}T${fixFormat(rows[0].jam)}`);
+      const lastDate = new Date(`${rows[rows.length - 1].tanggal}T${fixFormat(rows[rows.length - 1].jam)}`);
+
+      const durationMs = lastDate - firstDate;
+      const days = Math.floor(durationMs / (1000 * 60 * 60 * 24));
+      const hours = Math.floor((durationMs / (1000 * 60 * 60)) % 24);
+      const minutes = Math.floor((durationMs / (1000 * 60)) % 60);
+
+      document.getElementById("maxSummary").innerText = `${maxSuhu}°C / ${maxRH}%RH`;
+      document.getElementById("minSummary").innerText = `${minSuhu}°C / ${minRH}%RH`;
+      document.getElementById("avgSummary").innerText = `${avgSuhu}°C / ${avgRH}%RH`;
+      document.getElementById("firstReading").innerText = first;
+      document.getElementById("lastReading").innerText = last;
+      document.getElementById("logDuration").innerText = `${days}d ${hours}h ${minutes}m`;
+    }
+
+    function downloadExcel() {
+      const table = document.getElementById("dataTable");
+      if (!table) return alert('Tabel belum tersedia');
+      const tableHTML = table.outerHTML.replace(/ /g, '%20');
+      const a = document.createElement('a');
+      a.href = 'data:application/vnd.ms-excel,' + tableHTML;
+      a.download = 'Tabel_Semua_Data.xls';
+      a.click();
+    }
+
+    async function downloadChartAndData() {
+      if (!chart) return alert('Grafik belum tersedia');
+      const zip = new JSZip();
+      const canvas = document.getElementById('chartCanvas');
+      const imageBlob = await new Promise(resolve => canvas.toBlob(resolve, 'image/png'));
+      zip.file('grafik_suhu_rh.png', imageBlob);
+
+      const labels = chart.data.labels;
+      const suhu = chart.data.datasets[0].data;
+      const rh = chart.data.datasets[1].data;
+
+      let table = `<table border="1"><tr><th>Waktu</th><th>Suhu (°C)</th><th>RH (%)</th></tr>`;
+      for (let i = 0; i < labels.length; i++) {
+        table += `<tr><td>${labels[i]}</td><td>${suhu[i]}</td><td>${rh[i]}</td></tr>`;
+      }
+      table += `</table>`;
+      zip.file('data_suhu_rh.xls', new Blob([table], { type: 'application/vnd.ms-excel' }));
+
+      const zipBlob = await zip.generateAsync({ type: "blob" });
+      saveAs(zipBlob, 'grafik_dan_data_suhu_rh.zip');
+    }
+
+    async function downloadPDF() {
+      if (!chart) return alert("Grafik belum tersedia");
+      const { jsPDF } = window.jspdf;
+      const doc = new jsPDF("l", "pt", "a4");
+
+      doc.setFontSize(18);
+      doc.text("Grafik Suhu & RH", 40, 40);
+
+      const canvas = document.getElementById("chartCanvas");
+      const imgData = canvas.toDataURL("image/png", 1.0);
+      doc.addImage(imgData, "PNG", 40, 60, 700, 300);
+
+      doc.setFontSize(12);
+      doc.text("Ringkasan Data:", 40, 380);
+      doc.text(document.getElementById("maxSummary").innerText, 60, 400);
+      doc.text(document.getElementById("minSummary").innerText, 60, 420);
+      doc.text(document.getElementById("avgSummary").innerText, 60, 440);
+      doc.text("First: " + document.getElementById("firstReading").innerText, 60, 460);
+      doc.text("Last: " + document.getElementById("lastReading").innerText, 60, 480);
+      doc.text("Duration: " + document.getElementById("logDuration").innerText, 60, 500);
+
+      const rows = [];
+      document.querySelectorAll("#dataTable tbody tr").forEach(tr => {
+        const row = Array.from(tr.querySelectorAll("td")).map(td => td.innerText);
+        rows.push(row);
+      });
+
+      doc.text("Tabel Data:", 40, 520);
+      doc.autoTable({
+        startY: 540,
+        head: [["No", "Tanggal", "Jam", "Suhu (°C)", "RH (%)"]],
+        body: rows,
+        styles: { fontSize: 8 }
+      });
+
+      doc.save("grafik_dan_data.pdf");
+    }
+
+    function setTodayDate() {
+      const today = new Date().toISOString().split("T")[0];
+      document.getElementById("startDate").value = today;
+      document.getElementById("endDate").value = today;
+    }
+
+    window.onload = () => {
+      setTodayDate();
+      getData();
+    };
+  </script>
+</body>
+</html>
